@@ -13,12 +13,15 @@ async function startServer() {
   // Proxy for KMB API to avoid CORS and handle large payload
   app.get("/api/kmb/*", async (req, res) => {
     try {
-      const apiPath = req.params[0];
+      const apiPath = req.params[0].replace(/\/$/, ""); // Remove trailing slash
       // Use the official KMB domain for server-side calls
       const url = `https://data.etabus.gov.hk/v1/transport/kmb/${apiPath}`;
+      console.log(`Proxying KMB request to: ${url}`);
+      
       const response = await fetch(url);
       if (!response.ok) {
-        throw new Error(`KMB API responded with ${response.status} for ${url}`);
+        console.error(`KMB API error: ${response.status} for ${url}`);
+        return res.status(response.status).json({ error: `KMB API responded with ${response.status}` });
       }
       const data = await response.json();
       res.json(data);

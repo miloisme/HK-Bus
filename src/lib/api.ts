@@ -65,7 +65,7 @@ export async function getAllRoutes(): Promise<Route[]> {
 
   try {
     // Fetch KMB via local proxy
-    const kmbRes = await fetchWithRetry("/api/kmb/route/");
+    const kmbRes = await fetchWithRetry("/api/kmb/route");
     const kmbData = await kmbRes.json();
     if (kmbData && kmbData.data) {
       kmbData.data.forEach((r: any) => {
@@ -126,7 +126,7 @@ export async function getRouteStops(route: Route, dir: 'inbound' | 'outbound'): 
   try {
     if (route.company === 'KMB') {
       const bound = dir === 'inbound' ? 'inbound' : 'outbound';
-      const res = await fetchWithRetry(`/api/kmb/route-stop/${route.route}/${bound}/${route.serviceType || '1'}/`);
+      const res = await fetchWithRetry(`/api/kmb/route-stop/${route.route}/${bound}/${route.serviceType || '1'}`);
       const data = await res.json();
       
       if (data && data.data) {
@@ -139,7 +139,7 @@ export async function getRouteStops(route: Route, dir: 'inbound' | 'outbound'): 
           await Promise.all(
             chunk.map(async (id: string) => {
               try {
-                const sRes = await fetchWithRetry(`/api/kmb/stop/${id}/`);
+                const sRes = await fetchWithRetry(`/api/kmb/stop/${id}`);
                 const sData = await sRes.json();
                 if (sData && sData.data) {
                   stopNames[id] = sData.data.name_tc;
@@ -222,7 +222,7 @@ export async function getRouteStops(route: Route, dir: 'inbound' | 'outbound'): 
 export async function getStopName(company: Company, stopId: string): Promise<string> {
   if (company === 'KMB') {
     try {
-      const res = await fetchWithRetry(`/api/kmb/stop/${stopId}/`);
+      const res = await fetchWithRetry(`/api/kmb/stop/${stopId}`);
       const data = await res.json();
       return data?.data?.name_tc || stopId;
     } catch {
@@ -244,7 +244,7 @@ export async function getAllKmbStops(): Promise<Stop[]> {
   if (allKmbStopsCache) return allKmbStopsCache;
   try {
     // Use local proxy to avoid CORS and handle large payload
-    const res = await fetchWithRetry("/api/kmb/stop/");
+    const res = await fetchWithRetry("/api/kmb/stop");
     const data = await res.json();
     if (data && data.data) {
       const stops = data.data.map((s: any) => ({
@@ -269,7 +269,7 @@ export async function getStopETAs(company: Company, stopId: string): Promise<ETA
   const etas: ETA[] = [];
   try {
     if (company === 'KMB') {
-      const res = await fetchWithRetry(`/api/kmb/stop-eta/${stopId}/`);
+      const res = await fetchWithRetry(`/api/kmb/stop-eta/${stopId}`);
       const data = await res.json();
       if (data && data.data) {
         data.data.forEach((e: any) => {
@@ -315,7 +315,7 @@ export async function getETA(route: Route, stopId: string, dir: 'inbound' | 'out
   
   try {
     if (route.company === 'KMB') {
-      const res = await fetchWithRetry(`/api/kmb/eta/${stopId}/${route.route}/${route.serviceType || '1'}/`);
+      const res = await fetchWithRetry(`/api/kmb/eta/${stopId}/${route.route}/${route.serviceType || '1'}`);
       const data = await res.json();
       if (data && data.data) {
         const targetDir = dir === 'inbound' ? 'I' : 'O';

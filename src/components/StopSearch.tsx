@@ -20,9 +20,11 @@ export function StopSearch({ onSelectStop }: StopSearchProps) {
     });
   }, []);
 
-  const filteredStops = stops.filter(
-    (s) => s.name.toLowerCase().includes(query.toLowerCase())
-  ).slice(0, 50); // limit to 50 results
+  const filteredStops = query.trim() === '' 
+    ? [] 
+    : stops.filter(
+        (s) => s.name.toLowerCase().includes(query.toLowerCase())
+      ).slice(0, 50);
 
   return (
     <div className="space-y-4">
@@ -44,7 +46,12 @@ export function StopSearch({ onSelectStop }: StopSearchProps) {
         </div>
       ) : (
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-          {filteredStops.length > 0 ? (
+          {query.trim() === '' ? (
+            <div className="text-center py-12 text-gray-500">
+              <MapPin className="w-12 h-12 mx-auto mb-4 text-gray-200" />
+              <p>請輸入車站名稱進行搜尋</p>
+            </div>
+          ) : filteredStops.length > 0 ? (
             <ul className="divide-y divide-gray-100">
               {filteredStops.map((s) => (
                 <li key={s.stopId}>
