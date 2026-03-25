@@ -14,13 +14,37 @@ async function startServer() {
   app.get("/api/kmb/*", async (req, res) => {
     try {
       const apiPath = req.params[0].replace(/\/$/, ""); // Remove trailing slash
-      // Use the official KMB domain for server-side calls
+      // Use official KMB domain as primary (it has all endpoints like /stop and /route)
       const url = `https://data.etabus.gov.hk/v1/transport/kmb/${apiPath}`;
       console.log(`Proxying KMB request to: ${url}`);
       
-      const response = await fetch(url);
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Accept': 'application/json',
+          'Accept-Language': 'zh-HK,zh;q=0.9,en;q=0.8',
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
+      });
+
       if (!response.ok) {
         console.error(`KMB API error: ${response.status} for ${url}`);
+        
+        // If official domain fails (e.g. 403 or 404), try the government mirror as fallback
+        if (response.status === 403 || response.status === 404) {
+          const fallbackUrl = `https://rt.data.gov.hk/v1/transport/kmb/${apiPath}`;
+          console.log(`Retrying with government mirror: ${fallbackUrl}`);
+          const fallbackRes = await fetch(fallbackUrl, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            }
+          });
+          if (fallbackRes.ok) {
+            const data = await fallbackRes.json();
+            return res.json(data);
+          }
+        }
         return res.status(response.status).json({ error: `KMB API responded with ${response.status}` });
       }
       const data = await response.json();
