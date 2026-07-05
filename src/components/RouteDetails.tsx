@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, ArrowRightLeft, Loader2, MapPin, Bookmark } from 'lucide-react';
-import { Route, Stop, getRouteStops } from '../lib/api';
+import { Route, Stop, ETA, getRouteStops, getETA } from '../lib/api';
 import { useBookmarkStore } from '../lib/store';
 
 interface RouteDetailsProps {
@@ -19,16 +19,60 @@ export function RouteDetails({ route, initialDir, onBack, onSelectStop }: RouteD
     setDir(initialDir || (route.company === 'KMB' && route.bound === 'I' ? 'inbound' : 'outbound'));
   }, [route, initialDir]);
   const [stops, setStops] = useState<Stop[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [stopsLoading, setStopsLoading] = useState(true);
+  const [etasMap, setEtasMap] = useState<Record<string, ETA[]>>({});
+  const [etasLoading, setEtasLoading] = useState(false);
+  const mountedRef = useRef(true);
   const { addBookmark, removeBookmark, isBookmarked } = useBookmarkStore();
 
   useEffect(() => {
-    setLoading(true);
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  useEffect(() => {
+    setStopsLoading(true);
+    setEtasMap({});
+    setEtasLoading(true);
     getRouteStops(route, dir).then((data) => {
+      if (!mountedRef.current) return;
       setStops(data);
-      setLoading(false);
+      setStopsLoading(false);
     });
   }, [route, dir]);
+
+  const fetchAllEtas = async (stopList: Stop[]) => {
+    if (stopList.length === 0) return;
+    setEtasLoading(true);
+    const newMap: Record<string, ETA[]> = {};
+    const batchSize = 5;
+    for (let i = 0; i < stopList.length; i += batchSize) {
+      if (!mountedRef.current) return;
+      const batch = stopList.slice(i, i + batchSize);
+      const results = await Promise.all(
+        batch.map(s => getETA(route, s.stopId, dir).catch(() => [] as ETA[]))
+      );
+      batch.forEach((s, j) => {
+        const valid = results[j]
+          .filter(e => e.eta)
+          .sort((a, b) => new Date(a.eta!).getTime() - new Date(b.eta!).getTime());
+        newMap[s.stopId] = valid.slice(0, 3);
+      });
+      if (mountedRef.current) {
+        setEtasMap({ ...newMap });
+      }
+    }
+    if (mountedRef.current) {
+      setEtasLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (stops.length === 0) return;
+    fetchAllEtas(stops);
+    const interval = setInterval(() => fetchAllEtas(stops), 30000);
+    return () => clearInterval(interval);
+  }, [stops, dir, route]);
 
   const toggleDirection = () => {
     setDir((prev) => (prev === 'outbound' ? 'inbound' : 'outbound'));
@@ -109,7 +153,7 @@ export function RouteDetails({ route, initialDir, onBack, onSelectStop }: RouteD
         </button>
       )}
 
-      {loading ? (
+      {stopsLoading ? (
         <div className="flex flex-col items-center justify-center py-12 space-y-4">
           <Loader2 className="w-8 h-8 text-red-500 animate-spin" />
           <p className="text-sm text-gray-500">載入車站資料中...</p>
@@ -118,22 +162,44 @@ export function RouteDetails({ route, initialDir, onBack, onSelectStop }: RouteD
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
           {stops.length > 0 ? (
             <ul className="divide-y divide-gray-100">
-              {stops.map((s, i) => (
-                <li key={`${s.stopId}-${i}`}>
-                  <button
-                    onClick={() => onSelectStop(route, s, dir)}
-                    className="w-full text-left px-4 py-4 hover:bg-gray-50 flex items-center gap-4 transition-colors"
-                  >
-                    <div className="w-8 h-8 rounded-full bg-red-50 flex items-center justify-center text-red-600 font-bold text-sm shrink-0">
-                      {s.seq}
-                    </div>
-                    <div className="flex-1">
-                      <div className="font-medium text-gray-900">{s.name}</div>
-                    </div>
-                    <MapPin className="w-5 h-5 text-gray-300 shrink-0" />
-                  </button>
-                </li>
-              ))}
+              {stops.map((s, i) => {
+                const stopEtas = etasMap[s.stopId];
+                return (
+                  <li key={`${s.stopId}-${i}`}>
+                    <button
+                      onClick={() => onSelectStop(route, s, dir)}
+                      className="w-full text-left px-4 py-3 hover:bg-gray-50 flex items-start gap-4 transition-colors"
+                    >
+                      <div className="w-8 h-8 rounded-full bg-red-50 flex items-center justify-center text-red-600 font-bold text-sm shrink-0 mt-0.5">
+                        {s.seq}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-gray-900">{s.name}</div>
+                        {etasLoading && !stopEtas ? (
+                          <div className="mt-1 h-4 flex items-center">
+                            <Loader2 className="w-3 h-3 text-gray-400 animate-spin" />
+                          </div>
+                        ) : stopEtas && stopEtas.length > 0 ? (
+                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
+                            {stopEtas.map((eta, j) => {
+                              const mins = Math.max(0, Math.floor((new Date(eta.eta!).getTime() - Date.now()) / 60000));
+                              return (
+                                <span key={j} className="flex items-center gap-1 text-gray-600">
+                                  <span className="text-gray-400">往</span>
+                                  <span className="text-gray-600 truncate max-w-[80px]">{eta.dest}</span>
+                                  <span className="font-bold text-red-500">{mins === 0 ? '即將' : `${mins}分`}</span>
+                                  {j < stopEtas.length - 1 && <span className="text-gray-300">|</span>}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+                      <MapPin className="w-5 h-5 text-gray-300 shrink-0 mt-1" />
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           ) : (
             <div className="text-center py-12 text-gray-500">

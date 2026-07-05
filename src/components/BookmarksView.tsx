@@ -1,6 +1,7 @@
 import { Bookmark as BookmarkIcon, Bus, MapPin, Trash2 } from 'lucide-react';
 import { useBookmarkStore, Bookmark } from '../lib/store';
 import { Route, Stop } from '../lib/api';
+import { InlineETA } from './InlineETA';
 
 interface BookmarksViewProps {
   onSelectRoute: (route: Route, initialDir?: 'inbound' | 'outbound') => void;
@@ -70,19 +71,32 @@ export function BookmarksView({ onSelectRoute, onSelectStop, onSelectStopOnly }:
                 <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 bg-red-100 text-red-600">
                   {b.type === 'route' ? <Bus className="w-5 h-5" /> : <MapPin className="w-5 h-5" />}
                 </div>
-                <div className="flex-1">
-                  <div className="font-bold text-gray-900 flex items-center gap-2">
-                    {b.name}
-                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${
-                      b.company === 'KMB' ? 'bg-red-100 text-red-700' :
-                      b.company === 'CTB' ? 'bg-yellow-100 text-yellow-800' :
-                      'bg-green-100 text-green-700'
-                    }`}>
-                      {b.company === 'KMB' ? '九巴' : b.company === 'CTB' ? '城巴' : '大嶼山巴士'}
-                    </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-bold text-gray-900 flex items-center gap-2">
+                      {b.name}
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                        b.company === 'KMB' ? 'bg-red-100 text-red-700' :
+                        b.company === 'CTB' ? 'bg-yellow-100 text-yellow-800' :
+                        'bg-green-100 text-green-700'
+                      }`}>
+                        {b.company === 'KMB' ? '九巴' : b.company === 'CTB' ? '城巴' : '大嶼山巴士'}
+                      </span>
+                    </div>
+                    {b.subtitle && <div className="text-sm text-gray-500 mt-0.5">{b.subtitle}</div>}
+                    {(b.type === 'stop' || b.type === 'stop-only') && (
+                      <div className="mt-1.5">
+                        <InlineETA
+                          company={b.company}
+                          stopId={b.stopId!}
+                          route={b.type === 'stop' ? b.route : undefined}
+                          routeId={b.routeId}
+                          bound={b.bound}
+                          serviceType={b.serviceType}
+                          dir={b.dir}
+                        />
+                      </div>
+                    )}
                   </div>
-                  {b.subtitle && <div className="text-sm text-gray-500 mt-0.5">{b.subtitle}</div>}
-                </div>
               </button>
               <button
                 onClick={(e) => {
