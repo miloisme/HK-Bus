@@ -1,15 +1,21 @@
 import { Bookmark as BookmarkIcon, Bus, MapPin, Trash2 } from 'lucide-react';
-import { useBookmarkStore, Bookmark } from '../lib/store';
-import { Route, Stop } from '../lib/api';
+import { useBookmarkStore, type Bookmark } from '../lib/store';
+import { bookmarkToStop, bookmarkToVariant } from '../lib/bookmarks';
+import type { RouteVariant, Stop } from '../lib/types';
 import { InlineETA } from './InlineETA';
+import { OperatorBadge } from './OperatorBadge';
 
 interface BookmarksViewProps {
-  onSelectRoute: (route: Route, initialDir?: 'inbound' | 'outbound') => void;
-  onSelectStop: (route: Route, stop: Stop, dir: 'inbound' | 'outbound') => void;
+  onSelectRoute: (variant: RouteVariant) => void;
+  onSelectStop: (variant: RouteVariant, stop: Stop) => void;
   onSelectStopOnly: (stop: Stop) => void;
 }
 
-export function BookmarksView({ onSelectRoute, onSelectStop, onSelectStopOnly }: BookmarksViewProps) {
+export function BookmarksView({
+  onSelectRoute,
+  onSelectStop,
+  onSelectStopOnly,
+}: BookmarksViewProps) {
   const { bookmarks, removeBookmark } = useBookmarkStore();
 
   if (bookmarks.length === 0) {
@@ -22,38 +28,22 @@ export function BookmarksView({ onSelectRoute, onSelectStop, onSelectStopOnly }:
     );
   }
 
-  const handleSelect = (b: Bookmark) => {
-    if (b.type === 'stop-only' && b.stopId) {
-      const stop: Stop = {
-        company: b.company,
-        stopId: b.stopId,
-        name: b.name,
-        seq: 0,
-      };
+  const handleSelect = (bookmark: Bookmark) => {
+    const stop = bookmarkToStop(bookmark);
+    if (!stop) return;
+
+    if (bookmark.type === 'stop-only') {
       onSelectStopOnly(stop);
       return;
     }
 
-    const route: Route = {
-      company: b.company,
-      route: b.route,
-      routeId: b.routeId,
-      bound: b.bound,
-      serviceType: b.serviceType,
-      orig: b.orig || '',
-      dest: b.dest || '',
-    };
+    const variant = bookmarkToVariant(bookmark);
+    if (!variant) return;
 
-    if (b.type === 'route') {
-      onSelectRoute(route, b.dir);
-    } else if (b.type === 'stop' && b.stopId && b.dir) {
-      const stop: Stop = {
-        company: b.company,
-        stopId: b.stopId,
-        name: b.name,
-        seq: 0,
-      };
-      onSelectStop(route, stop, b.dir);
+    if (bookmark.type === 'route') {
+      onSelectRoute(variant);
+    } else {
+      onSelectStop(variant, stop);
     }
   };
 
@@ -61,56 +51,60 @@ export function BookmarksView({ onSelectRoute, onSelectStop, onSelectStopOnly }:
     <div className="space-y-4">
       <h2 className="text-xl font-bold text-gray-900 mb-4 px-2">已收藏項目</h2>
       <ul className="grid gap-3">
-        {bookmarks.map((b) => (
-          <li key={b.id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden group">
-            <div className="flex items-center">
-              <button
-                onClick={() => handleSelect(b)}
-                className="flex-1 text-left px-4 py-4 hover:bg-gray-50 flex items-center gap-4 transition-colors"
-              >
-                <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 bg-red-100 text-red-600">
-                  {b.type === 'route' ? <Bus className="w-5 h-5" /> : <MapPin className="w-5 h-5" />}
-                </div>
+        {bookmarks.map((bookmark) => {
+          const variant = bookmarkToVariant(bookmark);
+          const stop = bookmarkToStop(bookmark);
+          const isRoute = bookmark.type === 'route';
+
+          return (
+            <li
+              key={bookmark.id}
+              className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden group"
+            >
+              <div className="flex items-center">
+                <button
+                  onClick={() => handleSelect(bookmark)}
+                  className="flex-1 text-left px-4 py-4 hover:bg-gray-50 flex items-center gap-4 transition-colors"
+                >
+                  <div
+                    className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                      isRoute ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'
+                    }`}
+                  >
+                    {isRoute ? <Bus className="w-5 h-5" /> : <MapPin className="w-5 h-5" />}
+                  </div>
                   <div className="flex-1 min-w-0">
                     <div className="font-bold text-gray-900 flex items-center gap-2">
-                      {b.name}
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${
-                        b.company === 'KMB' ? 'bg-red-100 text-red-700' :
-                        b.company === 'CTB' ? 'bg-yellow-100 text-yellow-800' :
-                        'bg-green-100 text-green-700'
-                      }`}>
-                        {b.company === 'KMB' ? '九巴' : b.company === 'CTB' ? '城巴' : '大嶼山巴士'}
-                      </span>
+                      <span className="truncate">{bookmark.name}</span>
+                      <OperatorBadge company={bookmark.company} />
                     </div>
-                    {b.subtitle && <div className="text-sm text-gray-500 mt-0.5">{b.subtitle}</div>}
-                    {(b.type === 'stop' || b.type === 'stop-only') && (
+                    {bookmark.subtitle && (
+                      <div className="text-sm text-gray-500 mt-0.5 truncate">{bookmark.subtitle}</div>
+                    )}
+                    {!isRoute && stop && (
                       <div className="mt-1.5">
                         <InlineETA
-                          company={b.company}
-                          stopId={b.stopId!}
-                          route={b.type === 'stop' ? b.route : undefined}
-                          routeId={b.routeId}
-                          bound={b.bound}
-                          serviceType={b.serviceType}
-                          dir={b.dir}
+                          variant={bookmark.type === 'stop' ? (variant ?? undefined) : undefined}
+                          stop={stop}
                         />
                       </div>
                     )}
                   </div>
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  removeBookmark(b.id);
-                }}
-                className="p-4 text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
-                title="移除收藏"
-              >
-                <Trash2 className="w-5 h-5" />
-              </button>
-            </div>
-          </li>
-        ))}
+                </button>
+                <button
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    removeBookmark(bookmark.id);
+                  }}
+                  className="p-4 text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                  title="移除收藏"
+                >
+                  <Trash2 className="w-5 h-5" />
+                </button>
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

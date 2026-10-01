@@ -1,84 +1,61 @@
-import { useState, useEffect } from 'react';
+import { useMemo } from 'react';
 import { ArrowLeft, Loader2, Clock, AlertCircle, RefreshCw, Bookmark } from 'lucide-react';
-import { Stop, ETA, getStopETAs } from '../lib/api';
+import { getStopEtas, type Eta, type Stop } from '../lib/api';
+import { etaLabel, formatClock, sortEtasByTime } from '../lib/format';
+import { stopOnlyBookmark } from '../lib/bookmarks';
 import { useBookmarkStore } from '../lib/store';
+import { usePolling } from '../hooks/usePolling';
 
 interface StopDetailsProps {
   stop: Stop;
   onBack: () => void;
 }
 
+const EMPTY_ETAS: Eta[] = [];
+
 export function StopDetails({ stop, onBack }: StopDetailsProps) {
-  const [etas, setEtas] = useState<ETA[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const {
+    data: etas,
+    loading,
+    error,
+    lastUpdated,
+    refresh,
+  } = usePolling<Eta[]>(
+    async (signal) => sortEtasByTime(await getStopEtas(stop.company, stop.stopId, signal)),
+    [stop.company, stop.stopId],
+    EMPTY_ETAS,
+  );
+
   const { addBookmark, removeBookmark, isBookmarked } = useBookmarkStore();
-
-  const fetchETAs = async () => {
-    setLoading(true);
-    const data = await getStopETAs(stop.company, stop.stopId);
-    const validEtas = data.filter(e => e.eta);
-    validEtas.sort((a, b) => new Date(a.eta!).getTime() - new Date(b.eta!).getTime());
-    setEtas(validEtas);
-    setLastUpdated(new Date());
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    fetchETAs();
-    const interval = setInterval(fetchETAs, 30000); // refresh every 30s
-    return () => clearInterval(interval);
-  }, [stop]);
-
-  const bookmarkId = `stop-only-${stop.company}-${stop.stopId}`;
-  const bookmarked = isBookmarked(bookmarkId);
+  const bookmark = stopOnlyBookmark(stop);
+  const bookmarked = isBookmarked(bookmark.id);
 
   const toggleBookmark = () => {
-    if (bookmarked) {
-      removeBookmark(bookmarkId);
-    } else {
-      addBookmark({
-        id: bookmarkId,
-        type: 'stop-only',
-        company: stop.company,
-        stopId: stop.stopId,
-        name: stop.name,
-        subtitle: `所有到站路線 (${stop.company === 'KMB' ? '九巴' : stop.company === 'CTB' ? '城巴' : '大嶼山巴士'})`,
-        route: '',
-      });
+    if (bookmarked) removeBookmark(bookmark.id);
+    else addBookmark(bookmark);
+  };
+
+  const groups = useMemo(() => {
+    const grouped = new Map<string, Eta[]>();
+    for (const eta of etas) {
+      const key = `${eta.company}-${eta.route}-${eta.dest}`;
+      const bucket = grouped.get(key);
+      if (bucket) bucket.push(eta);
+      else grouped.set(key, [eta]);
     }
-  };
-
-  const formatETA = (etaStr: string | null) => {
-    if (!etaStr) return '未有資料';
-    const etaDate = new Date(etaStr);
-    const now = new Date();
-    const diffMins = Math.floor((etaDate.getTime() - now.getTime()) / 60000);
-    
-    if (diffMins < 0) return '已離開';
-    if (diffMins === 0) return '即將抵達';
-    return `${diffMins} 分鐘`;
-  };
-
-  // Group ETAs by route
-  const groupedETAs = etas.reduce((acc, eta) => {
-    const key = `${eta.route}-${eta.dest}`;
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(eta);
-    return acc;
-  }, {} as Record<string, ETA[]>);
+    return [...grouped.values()].sort((a, b) =>
+      (a[0]?.route ?? '').localeCompare(b[0]?.route ?? '', 'en'),
+    );
+  }, [etas]);
 
   return (
-    <div className="space-y-4 animate-in slide-in-from-right-4 duration-300">
+    <div className="space-y-4">
       <div className="flex items-center gap-3 mb-6">
-        <button 
-          onClick={onBack}
-          className="p-2 hover:bg-gray-200 rounded-full transition-colors"
-        >
+        <button onClick={onBack} className="p-2 hover:bg-gray-200 rounded-full transition-colors">
           <ArrowLeft className="w-6 h-6 text-gray-700" />
         </button>
-        <div className="flex-1">
-          <h2 className="text-2xl font-bold text-gray-900">{stop.name}</h2>
+        <div className="flex-1 min-w-0">
+          <h2 className="text-2xl font-bold text-gray-900 truncate">{stop.name}</h2>
           <p className="text-sm text-gray-500">所有到站路線</p>
         </div>
         <button
@@ -86,18 +63,19 @@ export function StopDetails({ stop, onBack }: StopDetailsProps) {
           className={`p-2 rounded-full transition-colors ${
             bookmarked ? 'bg-yellow-100 text-yellow-600' : 'hover:bg-gray-200 text-gray-400'
           }`}
+          aria-label="收藏"
         >
           <Bookmark className={`w-6 h-6 ${bookmarked ? 'fill-current' : ''}`} />
         </button>
       </div>
 
       <div className="flex justify-between items-center text-sm text-gray-500 px-1">
-        <div className="flex items-center gap-1">
+        <span className="flex items-center gap-1">
           <Clock className="w-4 h-4" />
-          最後更新: {lastUpdated.toLocaleTimeString('zh-HK', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-        </div>
-        <button 
-          onClick={fetchETAs}
+          {lastUpdated ? `最後更新 ${formatClock(lastUpdated, true)}` : '尚未更新'}
+        </span>
+        <button
+          onClick={refresh}
           disabled={loading}
           className="flex items-center gap-1 text-red-600 hover:text-red-800 disabled:opacity-50"
         >
@@ -111,28 +89,28 @@ export function StopDetails({ stop, onBack }: StopDetailsProps) {
           <Loader2 className="w-8 h-8 text-red-500 animate-spin" />
           <p className="text-sm text-gray-500">載入到站時間中...</p>
         </div>
-      ) : Object.keys(groupedETAs).length > 0 ? (
+      ) : groups.length > 0 ? (
         <div className="space-y-4">
-          {(Object.entries(groupedETAs) as [string, ETA[]][]).map(([key, routeEtas]) => {
-            const firstEta = routeEtas[0];
+          {groups.map((group) => {
+            const first = group[0];
+            if (!first) return null;
             return (
-              <div key={key} className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-                <div className="flex justify-between items-start mb-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-xl text-gray-900">{firstEta.route}</span>
-                      <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">
-                        往 {firstEta.dest}
-                      </span>
-                    </div>
-                  </div>
+              <div
+                key={`${first.company}-${first.route}-${first.dest}`}
+                className="bg-white rounded-xl shadow-sm border border-gray-100 p-4"
+              >
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="font-bold text-xl text-gray-900">{first.route}</span>
+                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">
+                    往 {first.dest}
+                  </span>
                 </div>
-                
+
                 <div className="space-y-2">
-                  {routeEtas.slice(0, 3).map((eta, i) => (
-                    <div key={i} className="flex items-center justify-between text-sm">
+                  {group.slice(0, 3).map((eta, index) => (
+                    <div key={index} className="flex items-center justify-between text-sm gap-3">
                       <span className="text-gray-500">
-                        {i === 0 ? '下一班' : i === 1 ? '第二班' : '第三班'}
+                        {index === 0 ? '下一班' : index === 1 ? '第二班' : '第三班'}
                       </span>
                       <div className="flex items-center gap-2">
                         {eta.rmk && (
@@ -140,8 +118,10 @@ export function StopDetails({ stop, onBack }: StopDetailsProps) {
                             {eta.rmk}
                           </span>
                         )}
-                        <span className={`font-bold ${i === 0 ? 'text-lg text-red-600' : 'text-gray-700'}`}>
-                          {formatETA(eta.eta)}
+                        <span
+                          className={`font-bold ${index === 0 ? 'text-lg text-red-600' : 'text-gray-700'}`}
+                        >
+                          {etaLabel(eta.eta)}
                         </span>
                       </div>
                     </div>
@@ -152,9 +132,9 @@ export function StopDetails({ stop, onBack }: StopDetailsProps) {
           })}
         </div>
       ) : (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center">
-          <AlertCircle className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-          <p className="text-gray-500">暫時沒有巴士到站資料</p>
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center space-y-2">
+          <AlertCircle className="w-12 h-12 text-gray-300 mx-auto" />
+          <p className="text-gray-500">{error ? '載入失敗，請稍後再試' : '暫時沒有到站資料'}</p>
         </div>
       )}
     </div>

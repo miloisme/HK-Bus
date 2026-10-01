@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { Bus, Bookmark, Search, MapPin } from 'lucide-react';
 
 interface LayoutProps {
@@ -14,7 +14,7 @@ export function Layout({ children, activeTab, onTabChange }: LayoutProps) {
         <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Bus className="w-6 h-6" />
-            <h1 className="text-xl font-bold tracking-wide">香港巴士到站預報</h1>
+            <h1 className="text-xl font-bold tracking-wide">香港巴士小巴到站預報</h1>
           </div>
         </div>
         <div className="max-w-3xl mx-auto flex">

@@ -1,84 +1,69 @@
-import { useState, useEffect, useRef } from 'react';
 import { Loader2 } from 'lucide-react';
-import { Company, ETA, getETA, getStopETAs } from '../lib/api';
+import {
+  getStopEtas,
+  getVariantEtas,
+  sortEtasByTime,
+  type Eta,
+  type RouteVariant,
+  type Stop,
+} from '../lib/api';
+import { compactEtaLabel } from '../lib/format';
+import { usePolling } from '../hooks/usePolling';
 
 interface InlineETAProps {
-  company: Company;
-  stopId: string;
-  route?: string;
-  routeId?: string;
-  bound?: string;
-  serviceType?: string;
-  dir?: 'inbound' | 'outbound';
+  /** 有傳則顯示單一路線的到站時間，否則顯示整個車站的到站時間 */
+  variant?: RouteVariant;
+  stop?: Stop;
 }
 
-function formatMinutes(etaStr: string | null): string | null {
-  if (!etaStr) return null;
-  const diffMins = Math.floor((new Date(etaStr).getTime() - Date.now()) / 60000);
-  if (diffMins < 0) return null;
-  if (diffMins === 0) return '即將';
-  return `${diffMins}分`;
-}
+const EMPTY_ETAS: Eta[] = [];
+const PER_LIMIT = 3;
 
-export function InlineETA({ company, stopId, route, routeId, bound, serviceType, dir }: InlineETAProps) {
-  const [etas, setEtas] = useState<ETA[]>([]);
-  const [loading, setLoading] = useState(true);
-  const mountedRef = useRef(true);
+export function InlineETA({ variant, stop }: InlineETAProps) {
+  const enabled = stop !== undefined;
 
-  useEffect(() => {
-    mountedRef.current = true;
-    const fetchETA = async () => {
-      if (!mountedRef.current) return;
-      setLoading(true);
-      try {
-        let data: ETA[];
-        if (route) {
-          const r: any = { company, route, routeId, bound, serviceType };
-          data = await getETA(r, stopId, dir || 'outbound');
-        } else {
-          data = await getStopETAs(company, stopId);
-        }
-        const valid = data.filter(e => e.eta);
-        valid.sort((a, b) => new Date(a.eta!).getTime() - new Date(b.eta!).getTime());
-        if (mountedRef.current) {
-          setEtas(valid.slice(0, 3));
-          setLoading(false);
-        }
-      } catch {
-        if (mountedRef.current) setLoading(false);
-      }
-    };
-    fetchETA();
-    const interval = setInterval(fetchETA, 30000);
-    return () => {
-      mountedRef.current = false;
-      clearInterval(interval);
-    };
-  }, [company, stopId, route, routeId, bound, serviceType, dir]);
+  const load = async (signal: AbortSignal): Promise<Eta[]> => {
+    if (!stop) return EMPTY_ETAS;
+    const raw = variant
+      ? await getVariantEtas(variant, stop, signal)
+      : await getStopEtas(stop.company, stop.stopId, signal);
+    return sortEtasByTime(raw).slice(0, PER_LIMIT);
+  };
 
-  if (loading) {
-    return <div className="h-5 flex items-center"><Loader2 className="w-3 h-3 text-gray-400 animate-spin" /></div>;
+  const { data: etas, loading } = usePolling<Eta[]>(
+    load,
+    [variant?.id ?? '', stop?.stopId ?? ''],
+    EMPTY_ETAS,
+    { enabled },
+  );
+
+  if (loading && etas.length === 0) {
+    return (
+      <div className="h-5 flex items-center">
+        <Loader2 className="w-3 h-3 text-gray-400 animate-spin" />
+      </div>
+    );
   }
 
-  if (etas.length === 0) {
+  const visible = etas
+    .map((eta, index) => ({ eta, index, label: compactEtaLabel(eta.eta) }))
+    .filter((item) => item.label !== null);
+
+  if (visible.length === 0) {
     return <div className="text-xs text-gray-400">暫無資料</div>;
   }
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-      {etas.map((eta, i) => {
-        const mins = formatMinutes(eta.eta);
-        if (!mins) return null;
-        return (
-          <span key={i} className="flex items-center gap-1 text-gray-600">
-            {!route && <span className="font-medium text-gray-800">{eta.route}</span>}
-            <span className="text-gray-400">往</span>
-            <span className="text-gray-600 truncate max-w-[80px]">{eta.dest}</span>
-            <span className="font-bold text-red-500">{mins}</span>
-            {i < etas.length - 1 && <span className="text-gray-300">|</span>}
-          </span>
-        );
-      })}
+      {visible.map(({ eta, index, label }) => (
+        <span key={index} className="flex items-center gap-1 text-gray-600">
+          {!variant && <span className="font-medium text-gray-800">{eta.route}</span>}
+          <span className="text-gray-400">往</span>
+          <span className="text-gray-600 truncate max-w-[80px]">{eta.dest}</span>
+          <span className="font-bold text-red-500">{label}</span>
+          {index < visible.length - 1 && <span className="text-gray-300">|</span>}
+        </span>
+      ))}
     </div>
   );
 }

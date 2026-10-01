@@ -6,82 +6,78 @@ import { StopETA } from './components/StopETA';
 import { BookmarksView } from './components/BookmarksView';
 import { StopSearch } from './components/StopSearch';
 import { StopDetails } from './components/StopDetails';
-import { Route, Stop } from './lib/api';
+import type { RouteVariant, Stop } from './lib/types';
 
-type ViewState = 
+type Tab = 'bookmarks' | 'search' | 'stop-search';
+
+type ViewState =
   | { type: 'home' }
-  | { type: 'route'; route: Route; initialDir?: 'inbound' | 'outbound' }
-  | { type: 'stop'; route: Route; stop: Stop; dir: 'inbound' | 'outbound' }
+  | { type: 'route'; variant: RouteVariant }
+  | { type: 'stop'; variant: RouteVariant; stop: Stop }
   | { type: 'stop-only'; stop: Stop };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'bookmarks' | 'search' | 'stop-search'>('bookmarks');
+  const [activeTab, setActiveTab] = useState<Tab>('bookmarks');
   const [viewState, setViewState] = useState<ViewState>({ type: 'home' });
 
-  const handleTabChange = (tab: 'bookmarks' | 'search' | 'stop-search') => {
+  const goHome = (tab: Tab) => {
     setActiveTab(tab);
     setViewState({ type: 'home' });
   };
 
-  const handleSelectRoute = (route: Route, initialDir?: 'inbound' | 'outbound') => {
-    setViewState({ type: 'route', route, initialDir });
-  };
-
-  const handleSelectStop = (route: Route, stop: Stop, dir: 'inbound' | 'outbound') => {
-    setViewState({ type: 'stop', route, stop, dir });
-  };
-
-  const handleSelectStopOnly = (stop: Stop) => {
-    setViewState({ type: 'stop-only', stop });
-  };
-
   const handleBack = () => {
     if (viewState.type === 'stop') {
-      setViewState({ type: 'route', route: viewState.route });
-    } else if (viewState.type === 'route' || viewState.type === 'stop-only') {
+      setViewState({ type: 'route', variant: viewState.variant });
+    } else {
       setViewState({ type: 'home' });
     }
   };
 
   return (
-    <Layout activeTab={activeTab} onTabChange={handleTabChange}>
+    <Layout activeTab={activeTab} onTabChange={goHome}>
       {viewState.type === 'home' && (
-        activeTab === 'bookmarks' ? (
-          <BookmarksView 
-            onSelectRoute={handleSelectRoute} 
-            onSelectStop={handleSelectStop} 
-            onSelectStopOnly={handleSelectStopOnly}
-          />
-        ) : activeTab === 'search' ? (
-          <RouteSearch onSelectRoute={handleSelectRoute} />
-        ) : (
-          <StopSearch onSelectStop={handleSelectStopOnly} />
-        )
+        <>
+          {activeTab === 'bookmarks' && (
+            <BookmarksView
+              onSelectRoute={(variant) => setViewState({ type: 'route', variant })}
+              onSelectStop={(variant, stop) => setViewState({ type: 'stop', variant, stop })}
+              onSelectStopOnly={(stop) => setViewState({ type: 'stop-only', stop })}
+            />
+          )}
+          {activeTab === 'search' && (
+            <RouteSearch
+              onSelectRoute={(variant) => {
+                setActiveTab('search');
+                setViewState({ type: 'route', variant });
+              }}
+            />
+          )}
+          {activeTab === 'stop-search' && (
+            <StopSearch
+              onSelectStop={(stop) => {
+                setActiveTab('stop-search');
+                setViewState({ type: 'stop-only', stop });
+              }}
+            />
+          )}
+        </>
       )}
 
       {viewState.type === 'route' && (
-        <RouteDetails 
-          route={viewState.route} 
-          initialDir={viewState.initialDir}
-          onBack={handleBack} 
-          onSelectStop={handleSelectStop} 
+        <RouteDetails
+          variant={viewState.variant}
+          onBack={handleBack}
+          onSelectVariant={(variant) => setViewState({ type: 'route', variant })}
+          onSelectStop={(variant, stop) => setViewState({ type: 'stop', variant, stop })}
         />
       )}
 
       {viewState.type === 'stop' && (
-        <StopETA 
-          route={viewState.route} 
-          stop={viewState.stop} 
-          dir={viewState.dir} 
-          onBack={handleBack} 
-        />
+        <StopETA variant={viewState.variant} stop={viewState.stop} onBack={handleBack} />
       )}
 
       {viewState.type === 'stop-only' && (
-        <StopDetails 
-          stop={viewState.stop} 
-          onBack={handleBack} 
-        />
+        <StopDetails stop={viewState.stop} onBack={handleBack} />
       )}
     </Layout>
   );

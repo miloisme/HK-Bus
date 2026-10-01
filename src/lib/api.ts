@@ -1,387 +1,109 @@
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+/**
+ * 對外的資料存取 facade。
+ *
+ * 元件只呼叫這裡的函式；每家營運商的端點細節都藏在 operators/ 底下。
+ * 這一層存在的唯一理由，是把「同時向多個營運商要資料並容忍其中一家失敗」
+ * 這種橫切邏輯集中在一處。
+ */
+import type { Company, Eta, RouteVariant, Stop } from './types';
+import { COMPANY_ORDER, getOperator } from './operators';
 
-export type Company = 'KMB' | 'CTB' | 'NLB';
+export type { Company, Direction, Eta, Headway, RouteVariant, Stop, VariantRef } from './types';
+export { formatClock, formatFare, etaLabel, compactEtaLabel, minutesUntil, sortEtasByTime } from './format';
+export { COMPANY_ORDER, operatorMeta, supportsStopSearch } from './operators';
 
-export interface Route {
-  company: Company;
-  route: string;
-  routeId?: string; // NLB specific
-  orig: string;
-  dest: string;
-  bound?: string; // KMB specific ('I' or 'O')
-  serviceType?: string; // KMB specific
-}
+/** 全部營運商的路線清單。單一營運商失敗不會拖垮整份搜尋結果。 */
+export async function getAllVariants(signal?: AbortSignal): Promise<RouteVariant[]> {
+  const results = await Promise.allSettled(
+    COMPANY_ORDER.map((company) => getOperator(company).listRoutes(signal)),
+  );
 
-export interface Stop {
-  company: Company;
-  stopId: string;
-  name: string;
-  seq: number;
-  lat?: string;
-  long?: string;
-}
-
-export interface ETA {
-  company: Company;
-  route: string;
-  dir: string;
-  dest: string;
-  eta: string | null;
-  rmk: string;
-  timestamp: string;
-}
-
-const API_BASE = {
-  KMB: 'https://data.etabus.gov.hk/v1/transport/kmb',
-  CTB: 'https://rt.data.gov.hk/v2/transport/citybus',
-  NLB: 'https://rt.data.gov.hk/v2/transport/nlb',
-};
-
-// Helper to determine if we should use the proxy or direct API
-// GitHub Pages doesn't support the Express proxy
-const isStaticEnv = window.location.hostname.includes('github.io');
-
-function getKmbUrl(path: string): string {
-  if (isStaticEnv) {
-    return `${API_BASE.KMB}/${path}`;
-  }
-  return `/api/kmb/${path}`;
-}
-
-// Helper for resilient fetching
-async function fetchWithRetry(url: string, retries = 2): Promise<Response> {
-  for (let i = 0; i <= retries; i++) {
-    try {
-      const res = await fetch(url);
-      if (res.ok) return res;
-      if (i === retries) throw new Error(`HTTP ${res.status}`);
-    } catch (err) {
-      if (i === retries) throw err;
-      // Wait a bit before retry
-      await new Promise(resolve => setTimeout(resolve, 1000));
+  const variants: RouteVariant[] = [];
+  results.forEach((result, index) => {
+    if (result.status === 'fulfilled') {
+      variants.push(...result.value);
+    } else {
+      console.error(`${COMPANY_ORDER[index]} 路線清單載入失敗`, result.reason);
     }
-  }
-  throw new Error('Fetch failed after retries');
+  });
+  return variants;
 }
 
-// Caching routes in memory to avoid fetching multiple times
-let cachedRoutes: Route[] | null = null;
-let allKmbStopsCache: Stop[] | null = null;
+/** 同一路線可切換的所有方向變體 */
+export async function getRouteVariants(
+  variant: RouteVariant,
+  signal?: AbortSignal,
+): Promise<RouteVariant[]> {
+  try {
+    const variants = await getOperator(variant.company).listVariants([variant], signal);
+    // 保證回傳的集合一定包含目前的變體，避免呼叫端切到空白
+    return variants.some((v) => v.id === variant.id) ? variants : [variant, ...variants];
+  } catch (error) {
+    console.error('載入方向變體失敗', error);
+    return [variant];
+  }
+}
 
-export async function getAllRoutes(): Promise<Route[]> {
-  if (cachedRoutes) return cachedRoutes;
+export async function getRouteStops(variant: RouteVariant, signal?: AbortSignal): Promise<Stop[]> {
+  try {
+    return await getOperator(variant.company).listStops(variant, signal);
+  } catch (error) {
+    console.error('載入路線站序失敗', error);
+    return [];
+  }
+}
 
-  const routes: Route[] = [];
+/** 某一站在該方向的到站時間 */
+export async function getVariantEtas(
+  variant: RouteVariant,
+  stop: Stop,
+  signal?: AbortSignal,
+): Promise<Eta[]> {
+  try {
+    return await getOperator(variant.company).getVariantEtas(variant, stop, signal);
+  } catch (error) {
+    console.error('載入到站時間失敗', error);
+    return [];
+  }
+}
+
+/**
+ * 車站看板：該站所有路線的到站時間。
+ * 不支援此能力的營運商回傳空陣列。
+ */
+export async function getStopEtas(
+  company: Company,
+  stopId: string,
+  signal?: AbortSignal,
+): Promise<Eta[]> {
+  const adapter = getOperator(company);
+  if (!adapter.getStopEtas) return [];
 
   try {
-    // Fetch KMB
-    const kmbRes = await fetchWithRetry(getKmbUrl("route"));
-    const kmbData = await kmbRes.json();
-    if (kmbData && kmbData.data) {
-      kmbData.data.forEach((r: any) => {
-        routes.push({
-          company: 'KMB',
-          route: r.route,
-          orig: r.orig_tc,
-          dest: r.dest_tc,
-          bound: r.bound,
-          serviceType: r.service_type,
-        });
-      });
-    }
-
-    // Fetch CTB
-    const ctbRes = await fetchWithRetry(`${API_BASE.CTB}/route/ctb`);
-    const ctbData = await ctbRes.json();
-    if (ctbData && ctbData.data) {
-      ctbData.data.forEach((r: any) => {
-        routes.push({
-          company: 'CTB',
-          route: r.route,
-          orig: r.orig_tc,
-          dest: r.dest_tc,
-        });
-      });
-    }
-
-    // Fetch NLB
-    const nlbRes = await fetchWithRetry(`${API_BASE.NLB}/route.php?action=list`);
-    const nlbData = await nlbRes.json();
-    if (nlbData && nlbData.routes) {
-      nlbData.routes.forEach((r: any) => {
-        const parts = r.routeName_c.split('>');
-        const orig = parts[0]?.trim() || '';
-        const dest = parts[1]?.trim() || '';
-        routes.push({
-          company: 'NLB',
-          route: r.routeNo,
-          routeId: r.routeId,
-          orig,
-          dest,
-        });
-      });
-    }
-
-    cachedRoutes = routes;
-  } catch (err) {
-    console.error('Failed to fetch routes', err);
+    return await adapter.getStopEtas(stopId, signal);
+  } catch (error) {
+    console.error('載入車站到站時間失敗', error);
+    return [];
   }
-
-  return routes;
 }
 
-export async function getRouteStops(route: Route, dir: 'inbound' | 'outbound'): Promise<Stop[]> {
+/** 支援全港車站搜尋的營運商的車站清單 */
+export async function getAllStops(signal?: AbortSignal): Promise<Stop[]> {
+  const adapters = COMPANY_ORDER.map(getOperator).filter((a) => typeof a.listAllStops === 'function');
+
+  const results = await Promise.allSettled(
+    adapters.map((adapter) => adapter.listAllStops!(signal)),
+  );
+
   const stops: Stop[] = [];
-
-  try {
-    if (route.company === 'KMB') {
-      const bound = dir === 'inbound' ? 'inbound' : 'outbound';
-      const res = await fetchWithRetry(getKmbUrl(`route-stop/${route.route}/${bound}/${route.serviceType || '1'}`));
-      const data = await res.json();
-      
-      if (data && data.data) {
-        // Fetch stop names in parallel, chunks of 10 to avoid overwhelming the browser
-        const stopIds = data.data.map((s: any) => s.stop);
-        const stopNames: Record<string, string> = {};
-        
-        for (let i = 0; i < stopIds.length; i += 10) {
-          const chunk = stopIds.slice(i, i + 10);
-          await Promise.all(
-            chunk.map(async (id: string) => {
-              try {
-                const sRes = await fetchWithRetry(getKmbUrl(`stop/${id}`));
-                const sData = await sRes.json();
-                if (sData && sData.data) {
-                  stopNames[id] = sData.data.name_tc;
-                }
-              } catch (e) {
-                console.error('Failed to fetch KMB stop', id);
-              }
-            })
-          );
-        }
-        
-        data.data.forEach((s: any) => {
-          stops.push({
-            company: 'KMB',
-            stopId: s.stop,
-            name: stopNames[s.stop] || s.stop,
-            seq: parseInt(s.seq, 10),
-          });
-        });
-      }
-    } else if (route.company === 'CTB') {
-      const bound = dir === 'inbound' ? 'inbound' : 'outbound';
-      const res = await fetchWithRetry(`${API_BASE.CTB}/route-stop/ctb/${route.route}/${bound}`);
-      const data = await res.json();
-      
-      if (data && data.data) {
-        // Fetch stop names in parallel, chunks of 10 to avoid overwhelming the browser
-        const stopIds = data.data.map((s: any) => s.stop);
-        const stopNames: Record<string, string> = {};
-        
-        for (let i = 0; i < stopIds.length; i += 10) {
-          const chunk = stopIds.slice(i, i + 10);
-          await Promise.all(
-            chunk.map(async (id: string) => {
-              try {
-                const sRes = await fetchWithRetry(`${API_BASE.CTB}/stop/${id}`);
-                const sData = await sRes.json();
-                if (sData && sData.data) {
-                  stopNames[id] = sData.data.name_tc;
-                }
-              } catch (e) {
-                console.error('Failed to fetch CTB stop', id);
-              }
-            })
-          );
-        }
-
-        data.data.forEach((s: any) => {
-          stops.push({
-            company: 'CTB',
-            stopId: s.stop,
-            name: stopNames[s.stop] || s.stop,
-            seq: parseInt(s.seq, 10),
-          });
-        });
-      }
-    } else if (route.company === 'NLB') {
-      // NLB doesn't use inbound/outbound in the same way, the routeId determines the direction
-      const res = await fetchWithRetry(`${API_BASE.NLB}/stop.php?action=list&routeId=${route.routeId}`);
-      const data = await res.json();
-      
-      if (data && data.stops) {
-        data.stops.forEach((s: any) => {
-          stops.push({
-            company: 'NLB',
-            stopId: s.stopId,
-            name: s.stopName_c,
-            seq: parseInt(s.stopSequence, 10) || stops.length + 1,
-          });
-        });
-      }
+  results.forEach((result, index) => {
+    if (result.status === 'fulfilled') {
+      stops.push(...result.value);
+    } else {
+      console.error(`${adapters[index]?.meta.nameTc} 車站清單載入失敗`, result.reason);
     }
-  } catch (err) {
-    console.error('Failed to fetch route stops', err);
-  }
+  });
 
-  return stops.sort((a, b) => a.seq - b.seq);
-}
-
-export async function getStopName(company: Company, stopId: string): Promise<string> {
-  if (company === 'KMB') {
-    try {
-      const res = await fetchWithRetry(getKmbUrl(`stop/${stopId}`));
-      const data = await res.json();
-      return data?.data?.name_tc || stopId;
-    } catch {
-      return stopId;
-    }
-  } else if (company === 'CTB') {
-    try {
-      const res = await fetchWithRetry(`${API_BASE.CTB}/stop/${stopId}`);
-      const data = await res.json();
-      return data?.data?.name_tc || stopId;
-    } catch {
-      return stopId;
-    }
-  }
-  return stopId;
-}
-
-export async function getAllKmbStops(): Promise<Stop[]> {
-  if (allKmbStopsCache) return allKmbStopsCache;
-  try {
-    const res = await fetchWithRetry(getKmbUrl("stop"));
-    const data = await res.json();
-    if (data && data.data) {
-      const stops = data.data.map((s: any) => ({
-        company: 'KMB' as Company,
-        stopId: s.stop,
-        name: s.name_tc,
-        seq: 0, // not applicable for general stop list
-        lat: s.lat,
-        long: s.long,
-      }));
-      allKmbStopsCache = stops;
-      return stops;
-    }
-    return [];
-  } catch (err) {
-    console.error('Failed to fetch all KMB stops:', err);
-    return [];
-  }
-}
-
-export async function getStopETAs(company: Company, stopId: string): Promise<ETA[]> {
-  const etas: ETA[] = [];
-  try {
-    if (company === 'KMB') {
-      const res = await fetchWithRetry(getKmbUrl(`stop-eta/${stopId}`));
-      const data = await res.json();
-      if (data && data.data) {
-        data.data.forEach((e: any) => {
-          etas.push({
-            company: 'KMB',
-            route: e.route,
-            dir: e.dir === 'I' ? 'inbound' : 'outbound',
-            dest: e.dest_tc,
-            eta: e.eta,
-            rmk: e.rmk_tc,
-            timestamp: e.data_timestamp,
-          });
-        });
-      }
-    } else if (company === 'CTB') {
-      const res = await fetchWithRetry(`${API_BASE.CTB}/eta/ctb/${stopId}`);
-      const data = await res.json();
-      if (data && data.data) {
-        data.data.forEach((e: any) => {
-          etas.push({
-            company: 'CTB',
-            route: e.route,
-            dir: e.dir === 'I' ? 'inbound' : 'outbound',
-            dest: e.dest_tc,
-            eta: e.eta,
-            rmk: e.rmk_tc,
-            timestamp: e.data_timestamp,
-          });
-        });
-      }
-    } else if (company === 'NLB') {
-      // NLB doesn't have a stop-eta API without routeId, but let's check if it does.
-      // Actually, NLB stop-eta requires routeId. We can't easily get all ETAs for a stop.
-    }
-  } catch (err) {
-    console.error('Failed to fetch stop ETAs', err);
-  }
-  return etas;
-}
-
-export async function getETA(route: Route, stopId: string, dir: 'inbound' | 'outbound'): Promise<ETA[]> {
-  const etas: ETA[] = [];
-  
-  try {
-    if (route.company === 'KMB') {
-      const res = await fetchWithRetry(getKmbUrl(`eta/${stopId}/${route.route}/${route.serviceType || '1'}`));
-      const data = await res.json();
-      if (data && data.data) {
-        const targetDir = dir === 'inbound' ? 'I' : 'O';
-        data.data.forEach((e: any) => {
-          if (e.dir === targetDir) {
-            etas.push({
-              company: 'KMB',
-              route: e.route,
-              dir: e.dir,
-              dest: e.dest_tc,
-              eta: e.eta,
-              rmk: e.rmk_tc,
-              timestamp: e.data_timestamp,
-            });
-          }
-        });
-      }
-    } else if (route.company === 'CTB') {
-      const res = await fetchWithRetry(`${API_BASE.CTB}/eta/ctb/${stopId}/${route.route}`);
-      const data = await res.json();
-      if (data && data.data) {
-        const targetDir = dir === 'inbound' ? 'I' : 'O';
-        data.data.forEach((e: any) => {
-          if (e.dir === targetDir) {
-            etas.push({
-              company: 'CTB',
-              route: e.route,
-              dir: e.dir,
-              dest: e.dest_tc,
-              eta: e.eta,
-              rmk: e.rmk_tc,
-              timestamp: e.data_timestamp,
-            });
-          }
-        });
-      }
-    } else if (route.company === 'NLB') {
-      const res = await fetchWithRetry(`${API_BASE.NLB}/stop.php?action=eta&routeId=${route.routeId}&stopId=${stopId}`);
-      const data = await res.json();
-      if (data && data.estimatedArrivals) {
-        data.estimatedArrivals.forEach((e: any) => {
-          etas.push({
-            company: 'NLB',
-            route: route.route,
-            dir: '',
-            dest: route.dest,
-            eta: e.estimatedArrivalTime,
-            rmk: e.routeVariantName_c || '',
-            timestamp: new Date().toISOString(),
-          });
-        });
-      }
-    }
-  } catch (err) {
-    console.error('Failed to fetch ETA', err);
-  }
-
-  return etas;
+  // 同一營運商內可能有重複站名（例如來回程共用站），以 stopId 去重
+  return Array.from(new Map(stops.map((stop) => [stop.stopId, stop])).values());
 }
